@@ -1,5 +1,7 @@
 # 🧠 Anji's Digital Brain
 
+[English](README.md) | [中文](README_zh.md)
+
 This repository serves as the persistent storage (the "Digital Brain") for **Anji**, an OpenClaw-based AI Agent acting as a Digital Twin.
 
 It contains the agent's identity, long-term memories, custom skills, and operational configurations. By syncing this workspace, Anji maintains continuity across different execution environments.

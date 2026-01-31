@@ -22,5 +22,8 @@ node_modules/
 .idea/
 .vscode/
 
-# Ignore memory state files that change too frequently if you prefer
-# memory/heartbeat-state.json
+# Docsify - Keep .nojekyll if needed
+# .nojekyll
+
+# Ignore memory state files
+memory/heartbeat-state.json
