@@ -1,6 +1,6 @@
 * Introduction
-  * [Home](README.md)
-  * [中文介绍](README_zh.md)
+  * [中文介绍 (Home)](README.md)
+  * [English README](README_en.md)
 
 * Identity
   * [Soul Persona](SOUL.md)
