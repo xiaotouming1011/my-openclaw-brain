@@ -1,10 +1,19 @@
 const lark = require('@larksuiteoapi/node-sdk');
 const http = require('http');
 
+const fs = require('fs');
+const path = require('path');
+
+// Try load config
+let localConfig = {};
+try {
+    localConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json')));
+} catch (e) {}
+
 // Configuration
 const CONFIG = {
-    APP_ID: "cli_a9f65e65c8b85bdf",
-    APP_SECRET: "sMS9hnyOPeBjIcfkXBetGhiQHmoCx6Iz",
+    APP_ID: process.env.FEISHU_APP_ID || localConfig.APP_ID,
+    APP_SECRET: process.env.FEISHU_APP_SECRET || localConfig.APP_SECRET,
     OPENCLAW_HOOK_URL: "http://127.0.0.1:18789/hooks/agent",
     OPENCLAW_HOOK_TOKEN: "feishu-bridge-secret-2024", 
     PORT: 3000

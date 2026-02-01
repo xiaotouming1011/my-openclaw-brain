@@ -27,3 +27,6 @@ node_modules/
 
 # Ignore memory state files
 memory/heartbeat-state.json
+
+# Secrets
+feishu-bridge/config.json
