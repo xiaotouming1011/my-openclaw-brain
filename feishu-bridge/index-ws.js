@@ -1,14 +1,22 @@
-const lark = require('@larksuiteoapi/node-sdk');
-const http = require('http');
+import { Client, WSClient, EventDispatcher } from '@larksuiteoapi/node-sdk';
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const fs = require('fs');
-const path = require('path');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Try load config
 let localConfig = {};
 try {
-    localConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json')));
-} catch (e) {}
+    const configPath = path.join(__dirname, 'config.json');
+    if (fs.existsSync(configPath)) {
+        localConfig = JSON.parse(fs.readFileSync(configPath));
+    }
+} catch (e) {
+    console.error("Failed to load config.json:", e.message);
+}
 
 // Configuration
 const CONFIG = {
@@ -19,21 +27,26 @@ const CONFIG = {
     PORT: 3000
 };
 
+if (!CONFIG.APP_ID || !CONFIG.APP_SECRET) {
+    console.error("Missing APP_ID or APP_SECRET in config.json or env");
+    process.exit(1);
+}
+
 // 1. Initialize Lark Client (for sending messages)
-const client = new lark.Client({
+const client = new Client({
     appId: CONFIG.APP_ID,
     appSecret: CONFIG.APP_SECRET,
 });
 
 // 2. Initialize WS Client (for receiving messages)
-const wsClient = new lark.WSClient({
+const wsClient = new WSClient({
     appId: CONFIG.APP_ID,
     appSecret: CONFIG.APP_SECRET,
 });
 
 // 3. Start WebSocket Connection
 wsClient.start({
-    eventDispatcher: new lark.EventDispatcher({}).register({
+    eventDispatcher: new EventDispatcher({}).register({
         'im.message.receive_v1': async (data) => {
             const chatId = data.message.chat_id;
             const content = JSON.parse(data.message.content);
@@ -43,7 +56,7 @@ wsClient.start({
 
             // Forward to OpenClaw
             try {
-                await fetch(CONFIG.OPENCLAW_HOOK_URL, {
+                const res = await fetch(CONFIG.OPENCLAW_HOOK_URL, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
@@ -52,10 +65,13 @@ wsClient.start({
                     body: JSON.stringify({
                         message: `(From Feishu) ${text}\n\n[SYSTEM]: Reply using 'feishu_reply' with chatId='${chatId}'.`,
                         sessionKey: `feishu-${chatId}`,
-                        deliver: false,
+                        deliver: false, // Don't auto-send via message tool, let agent handle
                         name: "Feishu"
                     })
                 });
+                if (!res.ok) {
+                    console.error("OpenClaw hook failed:", res.status, await res.text());
+                }
             } catch (err) {
                 console.error("Failed to forward to OpenClaw:", err);
             }
@@ -69,7 +85,16 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/send' && req.method === 'POST') {
         const buffers = [];
         for await (const chunk of req) buffers.push(chunk);
-        const body = JSON.parse(Buffer.concat(buffers).toString() || '{}');
+        const bodyStr = Buffer.concat(buffers).toString() || '{}';
+        
+        let body;
+        try {
+            body = JSON.parse(bodyStr);
+        } catch (e) {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: "Invalid JSON" }));
+            return;
+        }
 
         try {
             await client.im.message.create({
