@@ -173,16 +173,31 @@ async function sendToOpenClaw(text, sessionKey) {
                 const jsonMatch = stdout.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                     const output = JSON.parse(jsonMatch[0]);
-                    // Check various potential fields
-                    const reply = output.response || output.message || output.text || (output.choices && output.choices[0] && output.choices[0].message && output.choices[0].message.content);
+                    
+                    // Priority extraction of the actual message text
+                    let reply = null;
+                    
+                    // 1. Check for standard 'payloads' array (common in OpenClaw agent output)
+                    if (output.payloads && Array.isArray(output.payloads) && output.payloads.length > 0) {
+                        reply = output.payloads[0].text;
+                    } 
+                    // 2. Check for direct fields
+                    else if (output.response) reply = output.response;
+                    else if (output.message) reply = output.message;
+                    else if (output.text) reply = output.text;
+                    
+                    // 3. Check for nested 'choices' (OpenAI style, sometimes used)
+                    else if (output.choices && output.choices[0] && output.choices[0].message) {
+                        reply = output.choices[0].message.content;
+                    }
                     
                     if (reply) {
-                        console.log(`[Agent] Reply generated.`);
+                        console.log(`[Agent] Reply extracted.`);
                         broadcastToWS(reply);
                     } else {
-                        // If JSON exists but no clear text, dump the whole thing for debugging
-                        console.log("[Agent] JSON found but no text field.", output);
-                        broadcastToWS(JSON.stringify(output, null, 2)); 
+                        // If JSON exists but no clear text, log it but don't spam the user with metadata
+                        console.log("[Agent] JSON found but no text field.", JSON.stringify(output).substring(0, 100) + "...");
+                        broadcastToWS("[System] ... (Empty thought)"); 
                     }
                 } else {
                      // Fallback: raw text
