@@ -5,9 +5,12 @@ const WebSocket = require('ws');
 const mime = require('mime-types');
 
 const PORT = 8080;
-const HOST = '0.0.0.0'; // Listen on all interfaces
-const OPENCLAW_HOOK_URL = "http://127.0.0.1:18789/hooks/agent";
+const HOST = '0.0.0.0'; 
 const WEB_SESSION_KEY = "web-chat-v1";
+
+process.on('uncaughtException', (err) => {
+    console.error('[System] Uncaught Exception:', err);
+});
 
 // Create HTTP Server
 const server = http.createServer((req, res) => {
@@ -46,47 +49,14 @@ const server = http.createServer((req, res) => {
         });
         return;
     }
-
-    // Agent -> Client (Send API)
-    if (req.method === 'POST' && req.url === '/send') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            try {
-                const data = JSON.parse(body);
-                console.log("[API] Agent sending:", data.text);
-                
-                // Broadcast to all connected WebSocket clients
-                wss.clients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify({
-                            type: 'text',
-                            sender: 'ai',
-                            text: data.text
-                        }));
-                    }
-                });
-                
-                res.writeHead(200, {'Content-Type': 'application/json'});
-                res.end(JSON.stringify({status: 'ok'}));
-            } catch (e) {
-                console.error("[API] Error:", e);
-                res.writeHead(400);
-                res.end(JSON.stringify({error: 'Invalid JSON'}));
-            }
-        });
-        return;
-    }
     
-    // Upload API (for images/audio)
+    // Upload API
     if (req.method === 'POST' && req.url === '/upload') {
-        // Simple Body Parser for raw binary or base64? 
-        // Let's assume JSON with base64 for simplicity in v1
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
             try {
-                const data = JSON.parse(body); // { type: 'image', data: 'base64...', ext: 'png' }
+                const data = JSON.parse(body);
                 const buffer = Buffer.from(data.data, 'base64');
                 const filename = `upload-${Date.now()}.${data.ext}`;
                 const uploadPath = path.join(__dirname, 'uploads');
@@ -98,7 +68,6 @@ const server = http.createServer((req, res) => {
                 
                 console.log("[Upload] Saved:", fullPath);
                 
-                // Construct notification to Agent
                 const msgText = `[USER UPLOADED FILE: ${fullPath}]`;
                 await sendToOpenClaw(msgText, WEB_SESSION_KEY);
                 
@@ -119,14 +88,12 @@ const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws) => {
     console.log('[WS] Client connected');
-    
-    ws.send(JSON.stringify({ type: 'text', sender: 'ai', text: 'Connection established. Channel secure.' }));
+    ws.send(JSON.stringify({ type: 'text', sender: 'ai', text: 'Connected.' }));
 
     ws.on('message', async (message) => {
         try {
             const parsed = JSON.parse(message);
             console.log('[WS] Received:', parsed);
-            
             if (parsed.type === 'text') {
                 await sendToOpenClaw(parsed.text, WEB_SESSION_KEY);
             }
@@ -136,15 +103,12 @@ wss.on('connection', (ws) => {
     });
 });
 
-// Helper: Send to OpenClaw Agent and Relay Reply
 async function sendToOpenClaw(text, sessionKey) {
     try {
         console.log(`[Agent] Thinking on: "${text}"...`);
-        
         const { spawn } = require('child_process');
         
-        // Use the simpler 'openclaw agent' call, assuming 'openclaw' is in PATH or use absolute
-        // We will try to rely on the system PATH first, or fallback to absolute
+        // Robust command construction
         const cmd = 'openclaw'; 
         const args = ['agent', '--message', text, '--to', sessionKey, '--json', '--local'];
         
@@ -160,75 +124,55 @@ async function sendToOpenClaw(text, sessionKey) {
 
         child.on('close', (code) => {
             if (code !== 0) {
-                console.error(`[Agent] Process exited with code ${code}`);
+                console.error(`[Agent] Exit Code: ${code}`);
                 console.error(`[Agent] Stderr: ${stderr}`);
-                broadcastToWS(`[System Error] Brain disconnected (Code ${code}). \nDetails: ${stderr.substring(0, 100)}...`);
+                broadcastToWS(`[System Error] Brain busy (Code ${code})`);
                 return;
             }
             
             try {
-                // Find JSON in output (sometimes there is noise)
-                // console.log("DEBUG RAW STDOUT:", stdout); // Uncomment to debug
-                
+                // Robust JSON extraction
                 const jsonMatch = stdout.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                     const output = JSON.parse(jsonMatch[0]);
                     
-                    // Priority extraction of the actual message text
                     let reply = null;
-                    
-                    // 1. Check for standard 'payloads' array (common in OpenClaw agent output)
-                    if (output.payloads && Array.isArray(output.payloads) && output.payloads.length > 0) {
-                        reply = output.payloads[0].text;
-                    } 
-                    // 2. Check for direct fields
+                    if (output.payloads && output.payloads[0]) reply = output.payloads[0].text;
                     else if (output.response) reply = output.response;
                     else if (output.message) reply = output.message;
                     else if (output.text) reply = output.text;
-                    
-                    // 3. Check for nested 'choices' (OpenAI style, sometimes used)
-                    else if (output.choices && output.choices[0] && output.choices[0].message) {
-                        reply = output.choices[0].message.content;
-                    }
                     
                     if (reply) {
                         console.log(`[Agent] Reply extracted.`);
                         broadcastToWS(reply);
                     } else {
-                        // If JSON exists but no clear text, log it but don't spam the user with metadata
-                        console.log("[Agent] JSON found but no text field.", JSON.stringify(output).substring(0, 100) + "...");
-                        broadcastToWS("[System] ... (Empty thought)"); 
+                        console.log("[Agent] Empty JSON reply.");
+                        broadcastToWS("..."); 
                     }
                 } else {
-                     // Fallback: raw text
-                     console.log("[Agent] No JSON found, sending raw output.");
-                     broadcastToWS(stdout || "[System] No output from brain.");
+                     console.log("[Agent] No JSON found.");
+                     broadcastToWS(stdout || "...");
                 }
             } catch (e) {
-                console.error("[Agent] JSON Parse error:", e);
+                console.error("[Agent] Parse error:", e);
                 broadcastToWS(stdout);
             }
         });
 
     } catch (e) {
-        console.error("[Agent] Execution Error:", e);
-        broadcastToWS("[System] Internal Interface Error.");
+        console.error("[Agent] Exec Error:", e);
+        broadcastToWS("[System] Error.");
     }
 }
 
 function broadcastToWS(text) {
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-                type: 'text',
-                sender: 'ai',
-                text: text
-            }));
+            client.send(JSON.stringify({ type: 'text', sender: 'ai', text: text }));
         }
     });
 }
 
 server.listen(PORT, HOST, () => {
     console.log(`Chat Server running at http://${HOST}:${PORT}`);
-    console.log(`WebSocket ready.`);
 });
