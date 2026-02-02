@@ -4,7 +4,7 @@ const path = require('path');
 const WebSocket = require('ws');
 const mime = require('mime-types');
 
-const PORT = 3001;
+const PORT = 8080;
 const HOST = '0.0.0.0'; // Listen on all interfaces
 const OPENCLAW_HOOK_URL = "http://127.0.0.1:18789/hooks/agent";
 const WEB_SESSION_KEY = "web-chat-v1";
@@ -136,45 +136,60 @@ wss.on('connection', (ws) => {
     });
 });
 
-// Helper: Send to OpenClaw Agent
+// Helper: Send to OpenClaw Agent and Relay Reply
 async function sendToOpenClaw(text, sessionKey) {
     try {
-        const payload = {
-            message: text,
-            sessionKey: sessionKey,
-            deliver: false, // Don't auto-send, let the agent decide how to reply
-            name: "WebUser",
-            // INJECT SYSTEM INSTRUCTION TO FORCE REPLY TO THIS SERVER
-            // We append a hidden instruction so the agent knows to use the specific tool or curl
-            system: `[SYSTEM] The user sent this from the Web Interface. 
-            To reply, use the 'exec' tool to call: 
-            curl -X POST -d '{"text":"YOUR_REPLY"}' http://127.0.0.1:3001/send`
-        };
-
-        // Note: The 'system' field above might not be supported by the hook directly depending on implementation.
-        // Instead, we append to the message text.
-        const effectiveMessage = `${text}\n\n[SYSTEM: To reply to the web interface, execute: curl -X POST -H "Content-Type: application/json" -d '{"text":"<your message>"}' http://127.0.0.1:3001/send ]`;
-
-        const res = await fetch(OPENCLAW_HOOK_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                // "x-openclaw-token": "..." // If needed
-            },
-            body: JSON.stringify({
-                ...payload,
-                message: effectiveMessage
-            })
-        });
+        console.log(`[Agent] Thinking on: "${text}"...`);
         
-        if (!res.ok) {
-            console.error("[OpenClaw] Hook Error:", res.status, await res.text());
-        } else {
-            console.log("[OpenClaw] Sent to agent.");
-        }
+        // We will call the local OpenClaw CLI to get a response
+        // This is a simple blocking call.
+        const { exec } = require('child_process');
+        
+        // Construct a CLI command to run an agent turn
+        // We use --local to avoid complex gateway auth if possible, or gateway if running
+        // Using 'openclaw agent' command via gateway
+        const cmd = `/home/ubuntu/.nvm/versions/node/v24.13.0/bin/node /home/ubuntu/.nvm/versions/node/v24.13.0/lib/node_modules/openclaw/dist/index.js agent --message "${text.replace(/"/g, '\\"')}" --session "${sessionKey}" --json`;
+        
+        exec(cmd, (error, stdout, stderr) => {
+            if (error) {
+                console.error(`[Agent] Exec error: ${error.message}`);
+                broadcastToWS("[System] Brain is offline or busy.");
+                return;
+            }
+            
+            try {
+                // Parse the CLI JSON output
+                const output = JSON.parse(stdout);
+                const reply = output.response || output.message || output.text;
+                
+                if (reply) {
+                    console.log(`[Agent] Reply: ${reply.substring(0, 50)}...`);
+                    broadcastToWS(reply);
+                } else {
+                    console.warn("[Agent] Empty response from brain.");
+                }
+            } catch (e) {
+                console.error("[Agent] Parse error:", e);
+                // Fallback: try to send raw stdout if json parse fails
+                 if (stdout) broadcastToWS(stdout);
+            }
+        });
+
     } catch (e) {
-        console.error("[OpenClaw] Network Error:", e);
+        console.error("[Agent] Network Error:", e);
     }
+}
+
+function broadcastToWS(text) {
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+                type: 'text',
+                sender: 'ai',
+                text: text
+            }));
+        }
+    });
 }
 
 server.listen(PORT, HOST, () => {
