@@ -168,21 +168,26 @@ async function sendToOpenClaw(text, sessionKey) {
             
             try {
                 // Find JSON in output (sometimes there is noise)
+                // console.log("DEBUG RAW STDOUT:", stdout); // Uncomment to debug
+                
                 const jsonMatch = stdout.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                     const output = JSON.parse(jsonMatch[0]);
-                    const reply = output.response || output.message || output.text;
+                    // Check various potential fields
+                    const reply = output.response || output.message || output.text || (output.choices && output.choices[0] && output.choices[0].message && output.choices[0].message.content);
                     
                     if (reply) {
                         console.log(`[Agent] Reply generated.`);
                         broadcastToWS(reply);
                     } else {
-                        broadcastToWS("[System] Brain returned empty thoughts.");
+                        // If JSON exists but no clear text, dump the whole thing for debugging
+                        console.log("[Agent] JSON found but no text field.", output);
+                        broadcastToWS(JSON.stringify(output, null, 2)); 
                     }
                 } else {
                      // Fallback: raw text
                      console.log("[Agent] No JSON found, sending raw output.");
-                     broadcastToWS(stdout);
+                     broadcastToWS(stdout || "[System] No output from brain.");
                 }
             } catch (e) {
                 console.error("[Agent] JSON Parse error:", e);
