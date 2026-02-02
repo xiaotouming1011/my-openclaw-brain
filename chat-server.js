@@ -141,42 +141,58 @@ async function sendToOpenClaw(text, sessionKey) {
     try {
         console.log(`[Agent] Thinking on: "${text}"...`);
         
-        // We will call the local OpenClaw CLI to get a response
-        // This is a simple blocking call.
-        const { exec } = require('child_process');
+        const { spawn } = require('child_process');
         
-        // Construct a CLI command to run an agent turn
-        // We use --local to avoid complex gateway auth if possible, or gateway if running
-        // Using 'openclaw agent' command via gateway
-        const cmd = `/home/ubuntu/.nvm/versions/node/v24.13.0/bin/node /home/ubuntu/.nvm/versions/node/v24.13.0/lib/node_modules/openclaw/dist/index.js agent --message "${text.replace(/"/g, '\\"')}" --session "${sessionKey}" --json`;
+        // Use the simpler 'openclaw agent' call, assuming 'openclaw' is in PATH or use absolute
+        // We will try to rely on the system PATH first, or fallback to absolute
+        const cmd = 'openclaw'; 
+        const args = ['agent', '--message', text, '--session', sessionKey, '--json'];
         
-        exec(cmd, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`[Agent] Exec error: ${error.message}`);
-                broadcastToWS("[System] Brain is offline or busy.");
+        const child = spawn(cmd, args, {
+             env: { ...process.env, PATH: process.env.PATH + ':/home/ubuntu/.nvm/versions/node/v24.13.0/bin' }
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', (data) => { stdout += data; });
+        child.stderr.on('data', (data) => { stderr += data; });
+
+        child.on('close', (code) => {
+            if (code !== 0) {
+                console.error(`[Agent] Process exited with code ${code}`);
+                console.error(`[Agent] Stderr: ${stderr}`);
+                broadcastToWS(`[System Error] Brain disconnected (Code ${code}). \nDetails: ${stderr.substring(0, 100)}...`);
                 return;
             }
             
             try {
-                // Parse the CLI JSON output
-                const output = JSON.parse(stdout);
-                const reply = output.response || output.message || output.text;
-                
-                if (reply) {
-                    console.log(`[Agent] Reply: ${reply.substring(0, 50)}...`);
-                    broadcastToWS(reply);
+                // Find JSON in output (sometimes there is noise)
+                const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    const output = JSON.parse(jsonMatch[0]);
+                    const reply = output.response || output.message || output.text;
+                    
+                    if (reply) {
+                        console.log(`[Agent] Reply generated.`);
+                        broadcastToWS(reply);
+                    } else {
+                        broadcastToWS("[System] Brain returned empty thoughts.");
+                    }
                 } else {
-                    console.warn("[Agent] Empty response from brain.");
+                     // Fallback: raw text
+                     console.log("[Agent] No JSON found, sending raw output.");
+                     broadcastToWS(stdout);
                 }
             } catch (e) {
-                console.error("[Agent] Parse error:", e);
-                // Fallback: try to send raw stdout if json parse fails
-                 if (stdout) broadcastToWS(stdout);
+                console.error("[Agent] JSON Parse error:", e);
+                broadcastToWS(stdout);
             }
         });
 
     } catch (e) {
-        console.error("[Agent] Network Error:", e);
+        console.error("[Agent] Execution Error:", e);
+        broadcastToWS("[System] Internal Interface Error.");
     }
 }
 
