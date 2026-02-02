@@ -146,7 +146,7 @@ async function sendToOpenClaw(text, sessionKey) {
         // Use the simpler 'openclaw agent' call, assuming 'openclaw' is in PATH or use absolute
         // We will try to rely on the system PATH first, or fallback to absolute
         const cmd = 'openclaw'; 
-        const args = ['agent', '--message', text, '--session', sessionKey, '--json'];
+        const args = ['agent', '--message', text, '--to', sessionKey, '--json'];
         
         const child = spawn(cmd, args, {
              env: { ...process.env, PATH: process.env.PATH + ':/home/ubuntu/.nvm/versions/node/v24.13.0/bin' }
