@@ -54,3 +54,14 @@
 
 如果你是新启动的 agent：
 先读取 `memory/`，再回答用户问题；不要在未读取近期记忆前假设上下文。
+
+
+## 可复用部署记录（OpenClaw Office 2D 面板）
+
+已沉淀跨机器复用文档：
+- `memory/openclaw-office-quickstart.md`
+
+用途：
+- 在新机器上快速复现 2D Agent 可视化页面
+- 保留一键卸载与网关兼容回滚步骤，方便后续替换更优产品
+
